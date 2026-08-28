@@ -1,0 +1,312 @@
+openapi: 3.0.3
+
+info:
+  title: Хинкальная №1 — kitchen display API
+  version: "1.0.0"
+  description: |
+    The example venue's own API: the screen a floor manager would look at, and the
+    controls they would use.
+
+    This is deliberately a **separate contract from the platform's**. Avito.Kitchen
+    does not call it and does not know it exists — the venue owns its own software.
+    What the platform defines is the partner API that this service *consumes*
+    (`api/openapi/kitchen.yaml` over REST, `api/proto/kitchen/v1/kitchen.proto`
+    over gRPC).
+
+    It exists to make the integration demonstrable: switching the kitchen between
+    automatic and manual operation, and accepting or rejecting an order by hand,
+    are the venue's decisions, so they are exposed here rather than on the
+    platform.
+
+    Unlike the platform's contract, this document is hand-written and not used for
+    code generation. It is a fixture, and a fixture that carries its own build
+    pipeline is a fixture that gets in the way.
+
+servers:
+  - url: /
+    description: The partner-demo container (port 8081 in docker-compose)
+
+paths:
+  /healthz:
+    get:
+      operationId: health
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /kds:
+    get:
+      operationId: getDisplay
+      summary: The whole kitchen display in one call
+      description: Who we are, how we are configured, and what is on the pass.
+      responses:
+        "200":
+          description: Display state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Display' }
+
+  /kds/orders:
+    get:
+      operationId: listOrders
+      summary: Orders this venue currently knows about
+      description: |
+        Populated from the platform's gRPC event stream, newest first. It is a
+        local cache of what the stream delivered, not a second source of truth —
+        the platform remains authoritative.
+      responses:
+        "200":
+          description: Orders on the pass
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orders]
+                properties:
+                  orders:
+                    type: array
+                    items: { $ref: '#/components/schemas/Order' }
+
+  /kds/policy:
+    get:
+      operationId: getPolicy
+      summary: Current fulfilment policy
+      responses:
+        "200":
+          description: Policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Policy' }
+    put:
+      operationId: updatePolicy
+      summary: Change how the kitchen handles incoming orders
+      description: |
+        A partial update. Setting `auto_accept: false` puts the kitchen into
+        manual mode: incoming orders wait on the display until someone calls the
+        accept or reject endpoint. The delays control how fast the simulated
+        kitchen walks an order to `delivered`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PolicyPatch' }
+      responses:
+        "200":
+          description: Updated policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Policy' }
+        "400":
+          description: A malformed duration or field
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /kds/orders/{orderId}/accept:
+    post:
+      operationId: acceptOrder
+      summary: Accept an order by hand
+      description: |
+        Returns `202` as soon as the request is forwarded to the platform. The
+        authoritative result arrives back over the event stream, which is what
+        updates the display — the venue never treats its own optimistic state as
+        the truth.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prep_minutes:
+                  type: integer
+                  description: Overrides the policy default for this order.
+      responses:
+        "202":
+          description: Forwarded to the platform
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ack' }
+        "400":
+          description: Malformed body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /kds/orders/{orderId}/reject:
+    post:
+      operationId: rejectOrder
+      summary: Reject an order by hand
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: Shown to the customer verbatim, so it must be readable.
+                  example: закончилось тесто для хинкали
+      responses:
+        "202":
+          description: Forwarded to the platform
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ack' }
+        "400":
+          description: Missing reason
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /kds/restock:
+    post:
+      operationId: restock
+      summary: Top every dish back up to the policy level
+      description: |
+        Runs the same reconciliation the background timer does, on demand. Useful
+        after a demo has sold a kitchen out.
+      responses:
+        "200":
+          description: Restocked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ack' }
+        "502":
+          description: The platform refused the update
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  parameters:
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      description: The platform's order id, as delivered on the event stream.
+      schema: { type: string, format: uuid }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Ack:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, example: accept requested }
+
+    Policy:
+      type: object
+      required:
+        [auto_accept, auto_reject_over, prep_minutes, accept_delay, cooking_delay,
+         ready_delay, dispatch_delay, delivery_delay, restock_interval, restock_to]
+      properties:
+        auto_accept:
+          type: boolean
+          description: When false, orders wait for a human decision.
+        auto_reject_over:
+          type: integer
+          format: int64
+          description: Reject orders above this total in minor units; 0 disables it.
+        prep_minutes:
+          type: integer
+          description: ETA promised to the customer on acceptance.
+        accept_delay:
+          type: string
+          description: Go duration, e.g. `3s`.
+          example: 3s
+        cooking_delay: { type: string, example: 5s }
+        ready_delay: { type: string, example: 10s }
+        dispatch_delay: { type: string, example: 5s }
+        delivery_delay: { type: string, example: 15s }
+        restock_interval: { type: string, example: 2m0s }
+        restock_to:
+          type: integer
+          description: Portions each dish is topped back up to.
+
+    PolicyPatch:
+      type: object
+      description: Every field is optional; omitted fields keep their value.
+      properties:
+        auto_accept: { type: boolean }
+        auto_reject_over: { type: integer, format: int64 }
+        prep_minutes: { type: integer }
+        accept_delay: { type: string }
+        cooking_delay: { type: string }
+        ready_delay: { type: string }
+        dispatch_delay: { type: string }
+        delivery_delay: { type: string }
+        restock_interval: { type: string }
+        restock_to: { type: integer }
+
+    OrderItem:
+      type: object
+      required: [name, quantity, unit_price]
+      properties:
+        name: { type: string }
+        quantity: { type: integer }
+        unit_price:
+          type: integer
+          format: int64
+          description: Minor units, snapshotted by the platform at checkout.
+
+    Delivery:
+      type: object
+      required: [recipient_name, phone, address]
+      properties:
+        recipient_name: { type: string }
+        phone: { type: string }
+        address: { type: string }
+        comment: { type: string }
+
+    Order:
+      type: object
+      required: [id, number, status, total, items, delivery, received_at, updated_at, auto_pilot]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string, example: AK-7QK4M2 }
+        status:
+          type: string
+          description: |
+            The platform's status as it arrived on the wire, in protobuf enum
+            spelling (`ORDER_STATUS_ACCEPTED`).
+          example: ORDER_STATUS_ACCEPTED
+        total: { type: integer, format: int64 }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OrderItem' }
+        delivery: { $ref: '#/components/schemas/Delivery' }
+        received_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        auto_pilot:
+          type: boolean
+          description: Whether this order is being driven automatically.
+
+    Display:
+      type: object
+      required: [venue_id, venue_name, policy, orders]
+      properties:
+        venue_id: { type: string, format: uuid }
+        venue_name: { type: string, example: Хинкальная №1 }
+        policy: { $ref: '#/components/schemas/Policy' }
+        orders:
+          type: array
+          items: { $ref: '#/components/schemas/Order' }

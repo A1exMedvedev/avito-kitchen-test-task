@@ -1,0 +1,13 @@
+bin/
+coverage.out
+coverage.html
+*.test
+
+.env
+.env.local
+
+.task/
+
+api/gen/
+
+.idea/

@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.local
+.task/
+bin/
+coverage.out
+coverage.html
+
+docs
+*.md
+scripts
+test
+Taskfile.yml
+.golangci.yml
+
+api/gen/

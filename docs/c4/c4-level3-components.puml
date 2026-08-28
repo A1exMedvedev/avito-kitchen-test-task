@@ -1,0 +1,89 @@
+@startuml c4-level3-components
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam wrapWidth 250
+skinparam roundcorner 10
+skinparam ArrowColor #5A6B7C
+skinparam ArrowFontSize 11
+skinparam ArrowFontColor #33455A
+skinparam nodesep 30
+skinparam ranksep 40
+
+skinparam rectangle {
+  BorderColor #2E6DB4
+  BackgroundColor #FFFFFF
+  FontColor #10233A
+}
+
+title Уровень 3 — что внутри сервиса «Кухня»
+
+legend top
+  Читается сверху вниз: чем ниже слой, тем важнее правила и тем меньше он знает о внешнем мире.
+  Ядро внизу не потому, что второстепенное, а потому, что на него опираются все остальные.
+  Сплошная стрелка — «вызывает». Пунктирная — «переводит данные из одного формата в другой».
+endlegend
+
+rectangle "  1. ЧЕРЕЗ ЧТО ПРИХОДЯТ ЗАПРОСЫ  " as L1 #F2F7FD {
+  rectangle "**Обработчики REST**\n\nHTTP от покупателя.\nПереводят JSON в понятия\nдомена и обратно.\n<size:10>Ни одного бизнес-правила</size>" as http #D6E6F7
+  rectangle "**Обработчики gRPC**\n\nТо же для заведений, плюс\nпостоянный поток событий\nо заказах" as grpc #D6E6F7
+}
+
+rectangle "  2. СЦЕНАРИИ — В КАКОМ ПОРЯДКЕ ЧТО ДЕЛАТЬ  " as L2 #EAF2FB {
+  rectangle "**Сценарии использования**\n\nВитрина · Корзина · Оформление\nВедение заказа · Меню заведения\n\n<size:10>Знают порядок шагов и границы</size>\n<size:10>транзакции. Не знают ни SQL, ни HTTP</size>" as usecases #B9D5F0
+  rectangle "**Рассылка событий**\n\nФоновый цикл: забирает\nнеотправленные уведомления\nи раздаёт заведениям" as dispatcher #B9D5F0
+  rectangle "**Требования к внешнему миру**\n<size:10>интерфейсы</size>\n\n«Мне нужно уметь найти заказ,\nзаблокировать блюда, списать\nостаток, выполнить атомарно»" as ports #8FBBE8
+}
+
+rectangle "  3. ЯДРО — ГДЕ ПРИНИМАЮТСЯ ВСЕ РЕШЕНИЯ  " as L3 #DCE9F7 {
+  rectangle "Заведение · Блюдо · Корзина · Заказ\n\n**Кто и куда может двигать заказ**\nРасчёт корзины и её блокеров\nПревращение корзины в заказ\n\n<size:10>Можно ли заказать, законен ли переход,</size>\n<size:10>сколько стоит — решается только здесь</size>" as domain #6FA5DC
+}
+
+rectangle "  ЧЕМ ТРЕБОВАНИЯ ЗАКРЫВАЮТСЯ  " as L4 #FBF7F0 {
+  rectangle "**Хранилище PostgreSQL**\n\nSQL, блокировки строк,\nтранзакции, перевод строк\nтаблиц в сущности" as pg #F0E2CC
+  rectangle "**Шина событий**\n\nРаздача уведомлений\nвнутри процесса.\n<size:10>Заглушка вместо брокера</size>" as bus #F0E2CC
+}
+
+http --> usecases
+grpc --> usecases
+grpc --> ports : подписка на события
+
+usecases --> ports
+dispatcher --> ports
+usecases --> domain : спрашивает, что можно
+
+http ..> domain : переводит в ответ API
+pg ..> domain : переводит строки\nв сущности
+
+ports <.. pg : **закрывает требования**
+ports <.. bus : **закрывает требования**
+
+L1 -[hidden]down- L2
+L2 -[hidden]down- L3
+
+note right of ports #FFFDF0
+  Главное решение всей схемы.
+
+  Интерфейсы описаны тем, кто ими
+  **пользуется**, а не тем, кто их
+  реализует. Поэтому стрелка от
+  хранилища идёт вверх: оно
+  подстраивается под сценарии,
+  а не наоборот.
+
+  Без этого получились бы просто
+  «папки по слоям».
+end note
+
+note right of L3 #FFFDF0
+  Ядро не знает ни про базу, ни про HTTP,
+  ни про gRPC — и это проверяет компилятор,
+  а не дисциплина разработчика.
+
+  Поэтому правила проверяются тестами
+  за секунду, без поднятия чего бы то ни было.
+end note
+
+@enduml

@@ -1,0 +1,163 @@
+@startuml db-schema
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 11
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam class {
+  BackgroundColor #E8F0FA
+  BorderColor #2E6DB4
+  HeaderBackgroundColor #2E6DB4
+  FontColor #000000
+}
+
+title Схема БД — сервис доставки еды (PostgreSQL 17)
+
+entity venues {
+  **id** : uuid <<PK>>
+  --
+  slug : text <<UQ>>
+  name : text
+  cuisines : text[]
+  city : text
+  //status : text// — вердикт платформы
+  //is_open : bool// — рубильник заведения
+  avg_prep_minutes : int
+  min_order_amount : bigint
+  delivery_fee : bigint
+  rating : numeric(2,1)
+}
+
+entity venue_api_keys {
+  **id** : uuid <<PK>>
+  --
+  venue_id : uuid <<FK>>
+  //key_hash : text <<UQ>>// — только SHA-256
+  revoked_at : timestamptz
+}
+
+entity menu_categories {
+  **id** : uuid <<PK>>
+  --
+  venue_id : uuid <<FK>>
+  name : text
+  position : int
+  <<UQ (venue_id, name)>>
+}
+
+entity menu_items {
+  **id** : uuid <<PK>>
+  --
+  venue_id : uuid <<FK>>
+  category_id : uuid <<FK>>
+  name : text
+  price : bigint
+  //is_available : bool// — выключено кухней
+  //stock_quantity : int// — CHECK >= 0
+  deleted_at : timestamptz
+}
+
+entity customers {
+  **id** : uuid <<PK>>
+  --
+  display_name : text
+  phone : text
+}
+
+entity carts {
+  **id** : uuid <<PK>>
+  --
+  customer_id : uuid <<FK>>
+  venue_id : uuid <<FK>>
+  status : text
+  <<UQ (customer_id) WHERE active>>
+}
+
+entity cart_items {
+  **id** : uuid <<PK>>
+  --
+  cart_id : uuid <<FK>>
+  menu_item_id : uuid <<FK>>
+  quantity : int
+  <<UQ (cart_id, menu_item_id)>>
+}
+
+entity orders {
+  **id** : uuid <<PK>>
+  --
+  number : text <<UQ>>
+  customer_id : uuid <<FK>>
+  venue_id : uuid <<FK>>
+  status : text
+  items_total / delivery_fee / total : bigint
+  recipient_name / phone / address : text
+  status_reason : text
+  //idempotency_key : text//
+  //version : int// — оптимистичная блокировка
+  <<UQ (customer_id, idempotency_key)>>
+}
+
+entity order_items {
+  **id** : uuid <<PK>>
+  --
+  order_id : uuid <<FK>>
+  menu_item_id : uuid <<FK>>
+  //name : text// — снимок
+  //unit_price : bigint// — снимок
+  quantity : int
+  line_total : bigint
+}
+
+entity order_status_history {
+  **id** : uuid <<PK>>
+  --
+  order_id : uuid <<FK>>
+  from_status / to_status : text
+  actor : text
+  reason : text
+  occurred_at : timestamptz
+}
+
+entity outbox_events {
+  **id** : uuid <<PK>>
+  --
+  event_type : text
+  aggregate_id : uuid
+  venue_id : uuid
+  payload : jsonb
+  //published_at : timestamptz//
+}
+
+venues ||--o{ venue_api_keys
+venues ||--o{ menu_categories
+venues ||--o{ menu_items
+menu_categories ||--o{ menu_items
+venues ||--o{ carts
+venues ||--o{ orders
+
+customers ||--o{ carts
+customers ||--o{ orders
+
+carts ||--o{ cart_items
+menu_items ||--o{ cart_items
+
+orders ||--o{ order_items
+menu_items ||--o{ order_items
+orders ||--o{ order_status_history
+
+orders ..> outbox_events : запись в той же\nтранзакции
+
+note bottom
+  Деньги — BIGINT в копейках: дробной копейки
+  не бывает, а float у денег ошибается.
+
+  menu_items удаляются мягко: заказ ссылается
+  на блюдо, и чек должен читаться и через год.
+
+  Названия и цены в order_items — снимок на момент
+  оформления, поэтому правка меню не переписывает
+  историю.
+end note
+
+@enduml

@@ -1,0 +1,43 @@
+version: v1alpha
+
+lint:
+  use:
+    - DIRECTORY_SAME_PACKAGE
+    - PACKAGE_DEFINED
+    - PACKAGE_DIRECTORY_MATCH
+    - PACKAGE_SAME_DIRECTORY
+    - ENUM_FIRST_VALUE_ZERO
+    - ENUM_NO_ALLOW_ALIAS
+    - ENUM_PASCAL_CASE
+    - ENUM_VALUE_UPPER_SNAKE_CASE
+    - FIELD_LOWER_SNAKE_CASE
+    - IMPORT_NO_PUBLIC
+    - IMPORT_USED
+    - MESSAGE_PASCAL_CASE
+    - ONEOF_LOWER_SNAKE_CASE
+    - PACKAGE_LOWER_SNAKE_CASE
+    - PACKAGE_SAME_GO_PACKAGE
+    - RPC_PASCAL_CASE
+    - SERVICE_PASCAL_CASE
+    - ENUM_VALUE_PREFIX
+    - ENUM_ZERO_VALUE_SUFFIX
+    - FILE_LOWER_SNAKE_CASE
+    - PACKAGE_VERSION_SUFFIX
+    - SERVICE_SUFFIX
+  enum_zero_value_suffix: UNSPECIFIED
+  service_suffix: Service
+
+generate:
+  inputs:
+    - directory:
+        path: .
+        root: api/proto
+  plugins:
+    - name: go
+      out: api/gen
+      opts:
+        paths: source_relative
+    - name: go-grpc
+      out: api/gen
+      opts:
+        paths: source_relative

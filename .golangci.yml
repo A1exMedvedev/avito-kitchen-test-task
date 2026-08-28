@@ -1,0 +1,117 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - bodyclose
+    - rowserrcheck
+    - sqlclosecheck
+    - nilerr
+    - errorlint
+    - contextcheck
+    - noctx
+    - makezero
+    - durationcheck
+    - exhaustive
+
+    - gosec
+
+    - unused
+    - revive
+    - gocritic
+    - goconst
+    - misspell
+    - unconvert
+    - wastedassign
+    - prealloc
+    - nolintlint
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+
+    exhaustive:
+      default-signifies-exhaustive: true
+
+    govet:
+      enable:
+        - nilness
+
+    revive:
+      rules:
+        - name: error-strings
+        - name: error-return
+        - name: context-as-argument
+        - name: indent-error-flow
+        - name: unnecessary-stmt
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - whyNoLint
+        - ifElseChain
+        - unnamedResult
+        - hugeParam
+        - rangeValCopy
+
+    goconst:
+      min-len: 3
+      min-occurrences: 4
+
+    gosec:
+      config:
+        global:
+          audit: true
+
+    nolintlint:
+      require-explanation: false
+      require-specific: true
+      allow-unused: false
+
+  exclusions:
+    generated: lax
+    rules:
+      - path: 'api/gen/'
+        linters:
+          - revive
+          - gocritic
+          - gosec
+          - staticcheck
+          - misspell
+          - goconst
+          - prealloc
+          - exhaustive
+          - unused
+
+      - path: '_test\.go'
+        linters:
+          - gosec
+          - goconst
+          - prealloc
+          - contextcheck
+
+formatters:
+  enable:
+    - gofmt
+    - gci
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/backend-trainee-assignment-autumn-2026-a1exmedvedev-fa51bcd1)

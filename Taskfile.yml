@@ -1,0 +1,212 @@
+version: '3'
+
+vars:
+  MODULE: github.com/backend-trainee-assignment-autumn-2026-a1exmedvedev-fa51bcd1
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  POSTGRES_PORT: '{{.POSTGRES_PORT | default "5433"}}'
+  TEST_DATABASE_DSN: postgres://kitchen:kitchen@localhost:{{.POSTGRES_PORT | default "5433"}}/kitchen?sslmode=disable
+
+  OAPI_CODEGEN_VERSION: v2.4.1
+  PROTOC_GEN_GO_VERSION: v1.36.6
+  PROTOC_GEN_GO_GRPC_VERSION: v1.5.1
+  GOLANGCI_LINT_VERSION: v2.6.2
+  EASYP_VERSION: v0.16.6
+
+env:
+  APP_VERSION: '{{.VERSION}}'
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  up:
+    desc: Build and start the whole system
+    cmds:
+      - docker compose up --build -d
+      - |
+        echo
+        echo "  REST API      http://localhost:8080/api/v1"
+        echo "  OpenAPI       http://localhost:8080/openapi.json"
+        echo "  Swagger UI    http://localhost:8088"
+        echo "  gRPC          localhost:9090"
+        echo "  Demo venue    http://localhost:8081/kds"
+        echo
+        echo "  Try it:       task demo"
+
+  down:
+    desc: Stop everything and drop the database volume
+    cmds:
+      - docker compose down -v
+
+  stop:
+    desc: Stop the containers, keep the data
+    cmds:
+      - docker compose stop
+
+  logs:
+    desc: Follow the platform and demo venue logs
+    cmds:
+      - docker compose logs -f kitchen partner-demo
+
+  ps:
+    desc: Show the state of the stack
+    cmds:
+      - docker compose ps
+
+  psql:
+    desc: Open a psql shell on the running database
+    interactive: true
+    cmds:
+      - docker compose exec postgres psql -U kitchen -d kitchen
+
+  demo:
+    desc: Walk every business scenario against the running stack
+    cmds:
+      - ./scripts/demo.sh
+
+  build:
+    desc: Compile both binaries into bin/
+    deps: [generate]
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - bin/kitchen
+      - bin/partner-demo
+    cmds:
+      - go build -trimpath -ldflags="-X main.version={{.VERSION}}" -o bin/kitchen ./cmd/kitchen
+      - go build -trimpath -ldflags="-X main.version={{.VERSION}}" -o bin/partner-demo ./cmd/partner-demo
+
+  test:
+    desc: Run the unit tests with the race detector
+    deps: [generate]
+    cmds:
+      - go test -race -count=1 ./...
+
+  test:integration:
+    desc: Run the tests that need a real PostgreSQL
+    deps: [generate, db:up]
+    env:
+      TEST_DATABASE_DSN: '{{.TEST_DATABASE_DSN}}'
+    cmds:
+      - go test -tags integration -race -count=1 ./test/...
+
+  test:all:
+    desc: Unit and integration tests
+    cmds:
+      - task: test
+      - task: test:integration
+
+  cover:
+    desc: Produce a coverage report at coverage.html
+    deps: [generate]
+    cmds:
+      - go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+      - go tool cover -html=coverage.out -o coverage.html
+      - go tool cover -func=coverage.out | tail -1
+
+  db:up:
+    desc: Start only PostgreSQL and wait until it answers
+    cmds:
+      - docker compose up -d postgres
+      - |
+        until docker compose exec -T postgres pg_isready -U kitchen -d kitchen >/dev/null 2>&1; do
+          sleep 1
+        done
+    status:
+      - docker compose exec -T postgres pg_isready -U kitchen -d kitchen
+
+  lint:
+    desc: Run golangci-lint and the proto linter
+    deps: [generate]
+    cmds:
+      - golangci-lint run ./...
+      - easyp lint --root api/proto --path .
+
+  fmt:
+    desc: Apply the formatters golangci-lint enforces
+    cmds:
+      - golangci-lint fmt ./...
+
+  vet:
+    desc: Run go vet
+    deps: [generate]
+    cmds:
+      - go vet ./...
+
+  check:
+    desc: Format, lint and test — what CI runs
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
+
+  generate:
+    desc: Regenerate everything under api/gen
+    cmds:
+      - task: generate:proto
+      - task: generate:openapi
+
+  generate:proto:
+    desc: Generate Go from the .proto contracts (easyp)
+    preconditions:
+      - sh: command -v easyp
+        msg: "easyp is not installed - run: task tools"
+    sources:
+      - api/proto/**/*.proto
+      - easyp.yaml
+    generates:
+      - api/gen/kitchen/v1/*.go
+    cmds:
+      - easyp generate
+
+  generate:openapi:
+    desc: Generate the REST models and router from the OpenAPI document
+    preconditions:
+      - sh: command -v oapi-codegen
+        msg: "oapi-codegen is not installed - run: task tools"
+    sources:
+      - api/openapi/kitchen.yaml
+      - api/openapi/codegen.yaml
+    generates:
+      - api/gen/openapi/kitchenapi/*.go
+    cmds:
+      - mkdir -p api/gen/openapi/kitchenapi
+      - oapi-codegen -config api/openapi/codegen.yaml api/openapi/kitchen.yaml
+
+  generate:clean:
+    desc: Drop the generated code and rebuild it from the contracts
+    cmds:
+      - rm -rf api/gen
+      - task: generate
+      - go build ./...
+
+  proto:breaking:
+    desc: Check the proto contracts for breaking changes against the default branch
+    preconditions:
+      - sh: git rev-parse --is-inside-work-tree
+        msg: "needs a git repository - easyp breaking compares against a git ref"
+    cmds:
+      - easyp breaking
+
+  tools:
+    desc: Install the pinned generators and linters
+    cmds:
+      - go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@{{.OAPI_CODEGEN_VERSION}}
+      - go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_VERSION}}
+      - go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_VERSION}}
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+      - go install github.com/easyp-tech/easyp/cmd/easyp@{{.EASYP_VERSION}}
+
+  diagrams:
+    desc: Render the PlantUML diagrams in docs/ to PNG
+    sources:
+      - docs/**/*.puml
+    generates:
+      - docs/**/*.png
+    cmds:
+      - docker run --rm -v "$PWD/docs:/data" plantuml/plantuml:latest -tpng -o . "/data/**/*.puml"

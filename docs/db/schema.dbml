@@ -1,0 +1,364 @@
+Project kitchen {
+  database_type: 'PostgreSQL 17'
+  Note: '''
+    Схема сервиса доставки еды.
+
+    Три правила, которые объясняют почти все решения ниже:
+
+    1. Деньги — целые в копейках (BIGINT). Плавающей точки нет нигде.
+    2. Заказ хранит снимок цен и названий на момент оформления, поэтому
+       правки меню не переписывают историю.
+    3. Блюда удаляются мягко (deleted_at), потому что на них ссылаются
+       уже оформленные заказы.
+  '''
+}
+
+Table venues {
+  id uuid [pk, default: `gen_random_uuid()`]
+  slug text [not null, unique, note: 'человекочитаемый идентификатор для ссылок']
+  name text [not null]
+  description text [not null, default: '']
+  cuisines "text[]" [not null, default: `'{}'`, note: 'теги кухонь, ищутся через GIN']
+  city text [not null]
+  address text [not null]
+
+  status text [not null, default: 'active', note: 'active | suspended — вердикт ПЛАТФОРМЫ']
+  is_open boolean [not null, default: false, note: 'рубильник САМОГО заведения']
+
+  avg_prep_minutes integer [not null, default: 30, note: 'CHECK > 0']
+  min_order_amount bigint [not null, default: 0, note: 'копейки, CHECK >= 0']
+  delivery_fee bigint [not null, default: 0, note: 'копейки, CHECK >= 0']
+  rating "numeric(2,1)" [not null, default: 0, note: 'CHECK 0..5']
+
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  Indexes {
+    city [name: 'idx_venues_city_active', note: 'частичный: WHERE status = active']
+    cuisines [name: 'idx_venues_cuisines', note: 'GIN — поиск по тегам кухонь']
+    name [name: 'idx_venues_name_trgm', note: 'GIN + pg_trgm — поиск по подстроке']
+  }
+
+  Note: '''
+    Заведение на площадке.
+
+    status и is_open разделены намеренно: «закрыто на ночь» и «заблокировано
+    за нарушения» — разные факты с разными последствиями. Заведение управляет
+    только is_open; слить их в один enum значило бы дать заблокированному
+    ресторану разблокировать себя.
+
+    Заказы принимаются, когда status = active И is_open = true.
+  '''
+}
+
+Table venue_api_keys {
+  id uuid [pk, default: `gen_random_uuid()`]
+  venue_id uuid [not null]
+  name text [not null, note: 'назначение ключа, для человека']
+  key_hash text [not null, unique, note: 'SHA-256 — сам ключ не хранится']
+  created_at timestamptz [not null, default: `now()`]
+  revoked_at timestamptz [note: 'NULL = ключ действует']
+
+  Indexes {
+    venue_id [name: 'idx_venue_api_keys_venue']
+  }
+
+  Note: '''
+    Долгоживущие ключи доступа заведений к партнёрскому API.
+
+    Хранится только хеш: утечка дампа не даёт доступа. Ключ однозначно
+    определяет одно заведение, поэтому venue_id никогда не приходит
+    из запроса — он выводится из ключа.
+
+    Несколько ключей на заведение — чтобы ротировать без простоя.
+  '''
+}
+
+Table customers {
+  id uuid [pk, note: 'приходит из X-Customer-Id, не генерируется здесь']
+  display_name text [not null, default: '']
+  phone text [not null, default: '']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  Note: '''
+    Покупатель. Создаётся при первом обращении — аутентификация вынесена
+    за рамки MVP, в проде идентификатор проставлял бы шлюз авторизации.
+
+    Контакты подтягиваются из последнего заказа, чтобы предзаполнять форму.
+  '''
+}
+
+Table menu_categories {
+  id uuid [pk, default: `gen_random_uuid()`]
+  venue_id uuid [not null]
+  name text [not null]
+  position integer [not null, default: 0, note: 'порядок отображения']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  Indexes {
+    (venue_id, name) [unique]
+    (venue_id, position) [name: 'idx_menu_categories_venue']
+  }
+
+  Note: 'Раздел меню. Удалить можно только пустую — этим занимается FK от menu_items с ON DELETE RESTRICT.'
+}
+
+Table menu_items {
+  id uuid [pk, default: `gen_random_uuid()`]
+  venue_id uuid [not null]
+  category_id uuid [not null]
+  name text [not null]
+  description text [not null, default: '']
+  price bigint [not null, note: 'копейки, CHECK > 0']
+
+  is_available boolean [not null, default: true, note: 'кухня выключила позицию']
+  stock_quantity integer [not null, default: 0, note: 'CHECK >= 0 — последний рубеж против оверселла']
+
+  weight_grams integer [not null, default: 0]
+  position integer [not null, default: 0]
+
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  deleted_at timestamptz [note: 'мягкое удаление; NULL = блюдо в меню']
+
+  Indexes {
+    (venue_id, position) [name: 'idx_menu_items_venue', note: 'частичный: WHERE deleted_at IS NULL']
+    category_id [name: 'idx_menu_items_category', note: 'частичный: WHERE deleted_at IS NULL']
+    (venue_id, name) [unique, name: 'uq_menu_items_venue_name', note: 'частичный: WHERE deleted_at IS NULL — снятое имя можно переиспользовать']
+  }
+
+  Note: '''
+    Блюдо.
+
+    Доступность складывается из двух независимых причин: is_available
+    (кухня выключила) и stock_quantity (кончилось). Клиент видит разные
+    коды — disabled и sold_out, — потому что второе лечится ожиданием,
+    а первое нет.
+
+    CHECK (stock_quantity >= 0) — третий эшелон защиты остатка после
+    доменной проверки и SELECT ... FOR UPDATE. Если гонка всё же прошла,
+    падает он, и репозиторий переводит SQLSTATE 23514 в items_unavailable.
+
+    deleted_at, а не DELETE: order_items ссылаются на блюдо с ON DELETE
+    RESTRICT, и история заказов не должна разваливаться от правки меню.
+  '''
+}
+
+Table carts {
+  id uuid [pk, default: `gen_random_uuid()`]
+  customer_id uuid [not null]
+  venue_id uuid [not null]
+  status text [not null, default: 'active', note: 'active | ordered']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  Indexes {
+    customer_id [unique, name: 'uq_carts_active_customer', note: 'частичный: WHERE status = active']
+  }
+
+  Note: '''
+    Корзина. venue_id прямо в шапке: одна корзина — одно заведение,
+    поэтому добавление блюда из другого возвращает cart_venue_conflict
+    в момент добавления, а не на оформлении.
+
+    Частичный UNIQUE даёт «ровно одна активная корзина на покупателя»,
+    но сохраняет историю: оформленная переходит в ordered и остаётся.
+  '''
+}
+
+Table cart_items {
+  id uuid [pk, default: `gen_random_uuid()`]
+  cart_id uuid [not null]
+  menu_item_id uuid [not null]
+  quantity integer [not null, note: 'CHECK 1..99']
+  created_at timestamptz [not null, default: `now()`]
+
+  Indexes {
+    (cart_id, menu_item_id) [unique]
+    cart_id [name: 'idx_cart_items_cart']
+  }
+
+  Note: '''
+    Строка корзины. Цены здесь НЕТ — корзина каждый раз пересчитывается
+    по актуальному меню, поэтому подорожавшее блюдо покупатель видит
+    до оформления, а не после.
+
+    UNIQUE (cart_id, menu_item_id) делает PUT /cart/items идемпотентным:
+    клиент шлёт абсолютное количество, повтор запроса ничего не удваивает.
+  '''
+}
+
+Table orders {
+  id uuid [pk, note: 'генерируется приложением, не базой']
+  number text [not null, unique, note: 'AK-XXXXXX, алфавит без 0/O/1/I для диктовки голосом']
+  customer_id uuid [not null]
+  venue_id uuid [not null]
+
+  status text [not null, note: 'created | accepted | cooking | ready | in_delivery | delivered | rejected | cancelled']
+
+  items_total bigint [not null, note: 'копейки, CHECK >= 0']
+  delivery_fee bigint [not null, note: 'копейки, CHECK >= 0']
+  total bigint [not null, note: 'копейки, CHECK >= 0']
+
+  recipient_name text [not null]
+  phone text [not null]
+  address text [not null]
+  comment text [not null, default: '']
+
+  status_reason text [not null, default: '', note: 'причина отказа или отмены — её видит покупатель']
+  prep_minutes integer [not null, default: 0, note: 'ETA, обещанное заведением при принятии']
+
+  idempotency_key text [not null]
+  version integer [not null, default: 1, note: 'оптимистичная блокировка']
+
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  Indexes {
+    (customer_id, idempotency_key) [unique, name: 'uq_orders_idempotency']
+    (customer_id, created_at) [name: 'idx_orders_customer']
+    (venue_id, created_at) [name: 'idx_orders_venue']
+    (venue_id, created_at) [name: 'idx_orders_venue_active', note: 'частичный: WHERE status IN (created, accepted, cooking, ready, in_delivery) — очередь кухни']
+  }
+
+  Note: '''
+    Заказ. Адрес доставки скопирован сюда плоскими полями, а не связан
+    с профилем: он должен остаться тем, что было в момент оформления.
+
+    uq_orders_idempotency — механизм защиты от двойного заказа. Клиент
+    генерирует Idempotency-Key ДО первой попытки и повторяет его при
+    ретраях; повтор возвращает исходный заказ вместо создания второго.
+
+    version для оптимистичной блокировки: два параллельных перехода
+    статуса не затрут друг друга.
+
+    FK на customers и venues — ON DELETE RESTRICT: заказы нельзя осиротить.
+  '''
+}
+
+Table order_items {
+  id uuid [pk]
+  order_id uuid [not null]
+  menu_item_id uuid [not null, note: 'ссылка ради аналитики, не ради отображения']
+  name text [not null, note: 'СНИМОК названия на момент оформления']
+  unit_price bigint [not null, note: 'СНИМОК цены, копейки']
+  quantity integer [not null, note: 'CHECK > 0']
+  line_total bigint [not null, note: 'unit_price * quantity']
+
+  Indexes {
+    order_id [name: 'idx_order_items_order']
+  }
+
+  Note: '''
+    Строка заказа со снимками.
+
+    name и unit_price продублированы из menu_items намеренно — это не
+    денормализация ради скорости, а требование предметной области:
+    подорожавшее или переименованное блюдо не должно менять уже
+    оформленный заказ. Чек неизменен.
+
+    line_total хранится, а не считается: если правила округления
+    когда-нибудь поменяются, старые заказы останутся как были.
+  '''
+}
+
+Table order_status_history {
+  id uuid [pk]
+  order_id uuid [not null]
+  from_status text [note: 'NULL для самой первой записи — заказ создан']
+  to_status text [not null]
+  actor text [not null, note: 'customer | venue | system — кто сделал переход']
+  reason text [not null, default: '']
+  occurred_at timestamptz [not null, default: `now()`]
+
+  Indexes {
+    (order_id, occurred_at) [name: 'idx_order_status_history_order']
+  }
+
+  Note: '''
+    Таймлайн заказа: полная история переходов, append-only.
+
+    actor хранится, потому что право на переход зависит от того, кто его
+    делает: отменить может покупатель, принять — только заведение.
+    Таблица переходов с актёрами живёт в домене, здесь — журнал того,
+    что уже случилось.
+
+    Пишется в той же транзакции, что и смена статуса заказа.
+  '''
+}
+
+Table outbox_events {
+  id uuid [pk]
+  event_type text [not null, note: 'order.created | order.status_changed']
+  aggregate_type text [not null, default: 'order']
+  aggregate_id uuid [not null, note: 'id заказа — БЕЗ внешнего ключа, см. Note']
+  venue_id uuid [not null, note: 'адресат — БЕЗ внешнего ключа']
+  payload jsonb [not null, default: `'{}'`, note: 'только поля, специфичные для типа события']
+  occurred_at timestamptz [not null, default: `now()`]
+  published_at timestamptz [note: 'NULL = ещё не доставлено']
+
+  Indexes {
+    occurred_at [name: 'idx_outbox_pending', note: 'частичный: WHERE published_at IS NULL — индекс не растёт вместе с историей']
+  }
+
+  Note: '''
+    Транзакционный outbox: событие для заведения записывается в ТОЙ ЖЕ
+    транзакции, что и сам заказ. Атомарность обеспечивает Postgres,
+    поэтому «заказ создан, а кухня не узнала» невозможно.
+
+    Внешних ключей нет намеренно: это журнал доставки, а не часть модели.
+    FK мешал бы архивировать заказы и связывал бы таблицу, которая по
+    смыслу является транспортом.
+
+    payload — JSONB, потому что таблица полиморфна: у order.created одно
+    поле, у order.status_changed два, завтра появится третий тип со
+    своими. Колонки на каждое поле дали бы разреженную простыню
+    и миграцию на каждое новое событие.
+
+    Заказ в payload НЕ копируется — диспетчер дочитывает его из orders
+    перед отправкой, поэтому заведение всегда получает актуальное
+    состояние, а не снимок недельной давности.
+
+    Читается запросом FOR UPDATE SKIP LOCKED, чтобы несколько инстансов
+    приложения не разослали одно событие дважды.
+  '''
+}
+
+Ref: venue_api_keys.venue_id > venues.id [delete: cascade]
+Ref: menu_categories.venue_id > venues.id [delete: cascade]
+Ref: menu_items.venue_id > venues.id [delete: cascade]
+Ref: menu_items.category_id > menu_categories.id [delete: restrict]
+Ref: carts.customer_id > customers.id [delete: cascade]
+Ref: carts.venue_id > venues.id [delete: cascade]
+Ref: cart_items.cart_id > carts.id [delete: cascade]
+Ref: cart_items.menu_item_id > menu_items.id [delete: cascade]
+Ref: orders.customer_id > customers.id [delete: restrict]
+Ref: orders.venue_id > venues.id [delete: restrict]
+Ref: order_items.order_id > orders.id [delete: cascade]
+Ref: order_items.menu_item_id > menu_items.id [delete: restrict]
+Ref: order_status_history.order_id > orders.id [delete: cascade]
+
+TableGroup "Заведение" {
+  venues
+  venue_api_keys
+  menu_categories
+  menu_items
+}
+
+TableGroup "Покупатель" {
+  customers
+  carts
+  cart_items
+}
+
+TableGroup "Заказ" {
+  orders
+  order_items
+  order_status_history
+}
+
+TableGroup "Доставка событий" {
+  outbox_events
+}
