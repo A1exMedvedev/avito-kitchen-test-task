@@ -67,6 +67,12 @@ def field(document, path):
         value = value[int(part)] if part.isdigit() else value[part]
     print(value)
 
+def count(document, path):
+    value = document
+    for part in path.split("."):
+        value = value[int(part)] if part.isdigit() else value[part]
+    print(len(value))
+
 def item_id(document, predicate):
     tests = {
         "sold_out": lambda i: i["availability"]["stock_quantity"] == 0,
@@ -100,6 +106,7 @@ VIEWS = {
     "unavailable": unavailable,
     "kds": kds,
     "field": field,
+    "count": count,
     "item-id": item_id,
     "stock-of": stock_of,
 }

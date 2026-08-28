@@ -43,6 +43,14 @@ step "0. The platform is up"
 curl -fsS "$BASE/readyz" >/dev/null || fail "the API is not answering - run 'task up' first"
 ok "API is ready"
 
+menu_sections() { get "/venues/$HINKALNAYA/menu" 2>/dev/null | $RENDER count sections 2>/dev/null || echo 0; }
+for attempt in $(seq 1 60); do
+  [ "$(menu_sections)" -ge 2 ] && break
+  [ "$attempt" -eq 60 ] && fail "the example venue never published its menu - check 'docker compose logs partner-demo'"
+  sleep 1
+done
+ok "the example venue has published its menu through the partner API"
+
 CUSTOMER="$(new_customer)"
 info "acting as customer $CUSTOMER"
 
