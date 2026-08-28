@@ -39,12 +39,8 @@ jobs:
       - name: Generate from the contracts and build
         run: task generate:clean
 
-      - name: Lint the proto contracts
-        run: easyp lint --root api/proto --path .
-
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: v2.6.2
+      - name: Lint the Go code and the proto contracts
+        run: task lint
 
       - name: Unit tests
         run: task test
