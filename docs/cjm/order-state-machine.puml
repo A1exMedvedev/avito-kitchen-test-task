@@ -1,0 +1,72 @@
+@startuml order-state-machine
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam state {
+  BackgroundColor #E8F0FA
+  BorderColor #2E6DB4
+  FontColor #10233A
+}
+skinparam ArrowColor #5B6B7B
+skinparam ArrowFontSize 11
+skinparam NoteBackgroundColor #FFFDF0
+skinparam NoteBorderColor #C79A2E
+
+title Жизнь заказа — какие переходы разрешены и кому
+
+legend top
+  Подпись у стрелки — **кто имеет право** сделать этот переход.
+  Всё, чего на схеме нет, запрещено: правило описано таблицей в коде,
+  а не проверками в обработчиках, поэтому обойти его через другой транспорт нельзя.
+endlegend
+
+state "Создан" as created #FFF4D6 : ждёт решения кухни
+state "Принят" as accepted : кухня назвала время
+state "Готовится" as cooking
+state "Собран" as ready
+state "У курьера" as in_delivery
+state "Доставлен" as delivered #DFF5E1
+state "Отклонён" as rejected #FFE3E3 : кухня отказала
+state "Отменён" as cancelled #FFE3E3 : передумал покупатель
+
+[*] --> created : оформил заказ\n<size:10>покупатель</size>
+
+created --> accepted : принять\n<size:10>заведение</size>
+created --> rejected : отказать\n<size:10>заведение</size>
+created --> cancelled : отменить\n<size:10>покупатель</size>
+
+accepted --> cooking : взять в работу\n<size:10>заведение</size>
+accepted --> rejected : отказать\n<size:10>заведение</size>
+accepted --> cancelled : отменить\n<size:10>покупатель</size>
+
+cooking --> ready : <size:10>заведение</size>
+ready --> in_delivery : <size:10>заведение</size>
+in_delivery --> delivered : <size:10>заведение</size>
+
+delivered --> [*]
+rejected --> [*]
+cancelled --> [*]
+
+note right of cancelled
+  Отказ и отмена возвращают
+  списанные порции обратно в меню.
+  Доставка — нет: еда приготовлена.
+end note
+
+note left of cooking
+  Отменить можно только до этого шага.
+  Дальше продукты уже потрачены,
+  и отмена стала бы убытком кухни.
+end note
+
+note bottom
+  Почему актёр записан в правило, а не проверяется в обработчике:
+  покупатель не может подтвердить свой заказ за кухню,
+  заведение не может отменить его за покупателя.
+  Забыть продублировать такую проверку во втором транспорте невозможно —
+  её просто нет в транспорте.
+end note
+
+@enduml

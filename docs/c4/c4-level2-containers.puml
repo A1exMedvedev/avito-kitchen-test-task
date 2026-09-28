@@ -1,0 +1,89 @@
+@startuml c4-level2-containers
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 12
+skinparam wrapWidth 240
+skinparam roundcorner 10
+skinparam shadowing false
+skinparam ArrowColor #5B6B7B
+skinparam ArrowFontSize 11
+skinparam ArrowFontColor #2B3B4B
+skinparam nodesep 40
+skinparam ranksep 60
+
+skinparam rectangle {
+  BorderColor #1F5C99
+  BackgroundColor #2E7CC4
+  FontColor #FFFFFF
+}
+skinparam database {
+  BorderColor #1F5C99
+  BackgroundColor #2E7CC4
+  FontColor #FFFFFF
+}
+skinparam actor {
+  BorderColor #6B7A88
+  BackgroundColor #A9B6C3
+  FontColor #10233A
+}
+
+title Уровень 2 — из чего состоит система
+
+legend top
+  «Контейнер» в C4 — это отдельно запускаемая штука: процесс, база данных,
+  браузерное приложение. К Docker-контейнерам термин отношения не имеет.
+  Серым показано то, что не входит в MVP или является инструментом разработчика.
+endlegend
+
+actor "Покупатель" as customer
+rectangle "Веб-клиент\n<size:10>браузерное приложение</size>\n<size:10>вне рамок MVP</size>" as web #A9B6C3
+rectangle "Swagger UI\n<size:10>инструмент разработчика</size>" as swagger #A9B6C3
+
+package "  Платформа  " as platform #F4F8FC {
+  rectangle "**Сервис «Кухня»**\n<size:10>Go, один процесс</size>\n\n• REST для покупателя\n• gRPC для заведений\n• фоновая рассылка событий" as api
+  database "**PostgreSQL**\n\nЗаведения, меню, остатки,\nкорзины, заказы,\nочередь событий" as db
+}
+
+package "  Инфраструктура заведения  " as venue #FBF7F0 {
+  rectangle "**Пример заведения**\n<size:10>Go, отдельный сервис</size>\n\nСлушает заказы, принимает\nи ведёт их до доставки.\nСвой экран кухни на :8081" as partner #C77B2E
+}
+
+actor "Сотрудник\nзаведения" as staff
+
+customer --> web : хочет заказать еду
+web --> api : **① оформляет заказ**\nHTTPS, /api/v1/…\nкто именно — в заголовке\nX-Customer-Id
+
+api --> db : **② одной транзакцией**\nзаказ + списание остатка +\nуведомление для кухни
+
+api --> partner : **③ «вам новый заказ»**\ngRPC, постоянно\nоткрытый поток
+partner --> api : **④ «принял, готовлю, отдал курьеру»**\ngRPC, доступ по ключу заведения
+
+staff --> partner : смотрит очередь,\nможет принять или\nотклонить руками
+
+swagger ..> api : читает описание API\nи даёт потыкать руками
+
+note right of api #FFFDF0
+  Два разных API над **одним**
+  набором бизнес-правил.
+  Правила не знают, кто их
+  вызвал: покупатель по REST
+  или заведение по gRPC.
+end note
+
+note bottom of db #FFFDF0
+  Уведомление для кухни кладётся
+  в ту же транзакцию, что и заказ.
+  Поэтому «заказ есть, а кухня
+  о нём не знает» невозможно.
+end note
+
+note bottom of partner #FFFDF0
+  Обычный внешний клиент: ходит
+  только в публичное API по ключу,
+  доступа к базе у него нет.
+  Так проверяется, что по нашему
+  API реально можно интегрироваться.
+end note
+
+@enduml

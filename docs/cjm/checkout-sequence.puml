@@ -1,0 +1,127 @@
+@startuml checkout-sequence
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam sequenceArrowThickness 1
+skinparam ParticipantBackgroundColor #E8F0FA
+skinparam ParticipantBorderColor #2E6DB4
+skinparam ParticipantFontColor #10233A
+skinparam ActorBackgroundColor #A9B6C3
+skinparam NoteBackgroundColor #FFFDF0
+skinparam NoteBorderColor #C79A2E
+skinparam SequenceGroupBackgroundColor #F4F8FC
+skinparam SequenceGroupBorderColor #7A93AC
+
+title Что происходит внутри оформления заказа
+
+legend top
+  Самое сложное место сервиса. Всё, что между BEGIN и COMMIT, происходит целиком или никак.
+  Ниже COMMIT — асинхронная часть: покупатель уже получил ответ, кухня узнаёт чуть позже.
+endlegend
+
+actor "Покупатель" as user
+participant "Приём запроса" as http
+participant "Сценарий\nоформления" as svc
+participant "Правила\n(ядро)" as dom
+database "PostgreSQL" as db
+participant "Рассылка\nсобытий" as disp
+participant "Заведение" as partner
+
+user -> http : оформить заказ\n<size:10>с ключом повторной отправки</size>
+activate http
+http -> svc : передаёт намерение
+activate svc
+
+svc -> db : **BEGIN**
+activate db
+
+svc -> db : не оформляли ли уже\nс этим ключом?
+db --> svc : нет, это первая попытка
+note right of svc
+  Повтор после обрыва сети нашёл бы
+  готовый заказ и вернул его,
+  не создавая второй.
+end note
+
+svc -> db : корзина, заведение
+svc -> db : **блюда — с блокировкой строк**
+note right of db
+  С этой секунды и до конца транзакции
+  никто другой не может потратить
+  эти порции. Именно это делает проверку
+  наличия честной, а не рекомендательной.
+end note
+
+svc -> dom : посчитай корзину\nи проверь, можно ли заказать
+activate dom
+
+alt каких-то позиций уже нет
+  dom --> svc : нельзя, вот проблемные позиции
+  svc -> db : **ROLLBACK**
+  deactivate db
+  svc --> http : отказ с разбором по позициям
+  http --> user : **отказ**: что просили,\nсколько есть, почему нельзя
+  note right of user
+    Клиент чинит две строки из пяти,
+    а не собирает корзину заново.
+  end note
+
+else всё на месте
+  dom --> svc : заказ готов,\nцены и названия зафиксированы
+  deactivate dom
+  note right of dom
+    Снимок цен: подорожание меню
+    завтра не перепишет этот чек.
+  end note
+
+  svc -> db : списать порции
+  note right of db
+    В схеме стоит запрет на отрицательный
+    остаток. Если гонка всё же просочилась,
+    база не даст продать то, чего нет.
+  end note
+
+  svc -> db : записать заказ, его позиции\nи первую запись истории
+  svc -> db : закрыть корзину
+  svc -> db : **положить уведомление для кухни**
+  note right of db
+    В ту же транзакцию. Поэтому состояние
+    «заказ есть, а кухня о нём не знает»
+    недостижимо в принципе.
+  end note
+
+  svc -> db : **COMMIT**
+  deactivate db
+  svc --> http : заказ создан
+  deactivate svc
+  http --> user : **готово**, номер заказа
+  deactivate http
+
+  == дальше покупатель уже не ждёт ==
+
+  svc -> disp : разбуди рассылку
+  note right of disp
+    Только чтобы не ждать очередной тик.
+    Потерянный сигнал стоит задержки,
+    но не потери события: рассылка
+    всё равно периодически заглядывает
+    в очередь.
+  end note
+
+  disp -> db : забрать неотправленные\n<size:10>так, чтобы два инстанса не взяли одно и то же</size>
+  disp -> db : дочитать актуальное\nсостояние заказа
+  disp -> partner : новый заказ
+  disp -> db : пометить отправленным
+  note right of disp
+    Доставка «хотя бы один раз»: падение
+    между отправкой и пометкой приведёт
+    к повтору, поэтому получатель должен
+    уметь принять одно и то же дважды.
+  end note
+
+  partner -> partner : решает по своей политике\nи принимает заказ
+end
+
+@enduml

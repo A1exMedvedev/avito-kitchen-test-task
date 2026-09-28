@@ -1,0 +1,8 @@
+package: kitchenapi
+output: api/gen/openapi/kitchenapi/kitchenapi.gen.go
+generate:
+  models: true
+  std-http-server: true
+  embedded-spec: true
+output-options:
+  skip-prune: true

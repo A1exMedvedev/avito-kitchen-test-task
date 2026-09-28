@@ -1,0 +1,194 @@
+syntax = "proto3";
+
+package kitchen.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "backend-trainee-assignment-autumn-2026-a1exmedvedev-fa51bcd1/api/gen/kitchen/v1;kitchenv1";
+
+service PartnerService {
+  rpc SubscribeOrderEvents(SubscribeOrderEventsRequest) returns (stream OrderEvent);
+
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  rpc GetOrder(GetOrderRequest) returns (Order);
+  rpc AcceptOrder(AcceptOrderRequest) returns (Order);
+  rpc RejectOrder(RejectOrderRequest) returns (Order);
+  rpc UpdateOrderStatus(UpdateOrderStatusRequest) returns (Order);
+
+  rpc GetVenue(GetVenueRequest) returns (Venue);
+  rpc SetVenueOpen(SetVenueOpenRequest) returns (Venue);
+
+  rpc GetMenu(GetMenuRequest) returns (Menu);
+  rpc UpsertCategory(UpsertCategoryRequest) returns (MenuCategory);
+  rpc UpsertMenuItem(UpsertMenuItemRequest) returns (MenuItem);
+  rpc SetItemStock(SetItemStockRequest) returns (MenuItem);
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_CREATED = 1;
+  ORDER_STATUS_ACCEPTED = 2;
+  ORDER_STATUS_COOKING = 3;
+  ORDER_STATUS_READY = 4;
+  ORDER_STATUS_IN_DELIVERY = 5;
+  ORDER_STATUS_DELIVERED = 6;
+  ORDER_STATUS_REJECTED = 7;
+  ORDER_STATUS_CANCELLED = 8;
+}
+
+enum OrderEventType {
+  ORDER_EVENT_TYPE_UNSPECIFIED = 0;
+  ORDER_EVENT_TYPE_CREATED = 1;
+  ORDER_EVENT_TYPE_STATUS_CHANGED = 2;
+}
+
+message Money {
+  int64 minor_units = 1;
+  string currency = 2;
+}
+
+message Venue {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  repeated string cuisines = 5;
+  string city = 6;
+  string address = 7;
+  string status = 8;
+  bool is_open = 9;
+  int32 avg_prep_minutes = 10;
+  Money min_order_amount = 11;
+  Money delivery_fee = 12;
+  double rating = 13;
+}
+
+message MenuCategory {
+  string id = 1;
+  string name = 2;
+  int32 position = 3;
+}
+
+message MenuItem {
+  string id = 1;
+  string category_id = 2;
+  string name = 3;
+  string description = 4;
+  Money price = 5;
+  int32 stock_quantity = 6;
+  bool is_available = 7;
+  int32 weight_grams = 8;
+  int32 position = 9;
+}
+
+message Menu {
+  repeated MenuCategory categories = 1;
+  repeated MenuItem items = 2;
+}
+
+message OrderItem {
+  string menu_item_id = 1;
+  string name = 2;
+  Money unit_price = 3;
+  int32 quantity = 4;
+  Money line_total = 5;
+}
+
+message Delivery {
+  string recipient_name = 1;
+  string phone = 2;
+  string address = 3;
+  string comment = 4;
+}
+
+message Order {
+  string id = 1;
+  string number = 2;
+  string customer_id = 3;
+  string venue_id = 4;
+  OrderStatus status = 5;
+  repeated OrderItem items = 6;
+  Money items_total = 7;
+  Money delivery_fee = 8;
+  Money total = 9;
+  Delivery delivery = 10;
+  string status_reason = 11;
+  int32 prep_minutes = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message OrderEvent {
+  string event_id = 1;
+  OrderEventType type = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+  Order order = 4;
+  OrderStatus previous_status = 5;
+}
+
+message SubscribeOrderEventsRequest {
+  bool replay_active_orders = 1;
+}
+
+message ListOrdersRequest {
+  repeated OrderStatus statuses = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message ListOrdersResponse {
+  repeated Order orders = 1;
+  int32 total = 2;
+}
+
+message GetOrderRequest {
+  string order_id = 1;
+}
+
+message AcceptOrderRequest {
+  string order_id = 1;
+  int32 prep_minutes = 2;
+}
+
+message RejectOrderRequest {
+  string order_id = 1;
+  string reason = 2;
+}
+
+message UpdateOrderStatusRequest {
+  string order_id = 1;
+  OrderStatus status = 2;
+  string reason = 3;
+}
+
+message GetVenueRequest {}
+
+message SetVenueOpenRequest {
+  bool is_open = 1;
+}
+
+message GetMenuRequest {}
+
+message UpsertCategoryRequest {
+  string id = 1;
+  string name = 2;
+  int32 position = 3;
+}
+
+message UpsertMenuItemRequest {
+  string id = 1;
+  string category_id = 2;
+  string name = 3;
+  string description = 4;
+  Money price = 5;
+  int32 stock_quantity = 6;
+  bool is_available = 7;
+  int32 weight_grams = 8;
+  int32 position = 9;
+}
+
+message SetItemStockRequest {
+  string item_id = 1;
+  int32 stock_quantity = 2;
+  bool is_available = 3;
+}
